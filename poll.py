@@ -69,9 +69,13 @@ async def on_message(message):
         if message.content.startswith('[poll] active'):
             await message.channel.send([p for p in polls])
             return
+        if message.content.startswith('[poll] pin'):
+            poll_id = int(message.content[len('[poll] pin '):])
+            await polls[poll_id]['message'].pin()
+            return
         user_input = list(map(lambda x : x.strip('[]'), re.findall('\[.+?\]', message.content[len('[poll] '):])))
         if len(user_input) < 2:
-            await message.channel.send('Not enough info. Need [title] [question] [option1] [option2] ...')
+            await message.channel.send('Not enough info dummy! Need [title] [question] [option1] [option2] ...')
             return
         title, question = user_input[0:2]
         options = {o : 0 for o in user_input[2:]}
@@ -94,6 +98,7 @@ def displayHelp():
     [poll] active (list active polls)
     [poll] inactive <id> (make poll with id inactive)
     [poll] clear (make all polls inactive)
+    [poll] pin <id> (pin poll with id)
     '''
     embed = discord.Embed(title='For Dummies', color = 0x00ff00)
     embed.add_field(name='Commands', value=text, inline=False)
