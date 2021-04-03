@@ -1,8 +1,11 @@
-import discord, os, re, random, keep_alive
+import discord, dns, os, re, random, keep_alive
+from pymongo import MongoClient
+
+cluster = MongoClient(os.getenv('MONGO_URL'))
+db = cluster['dev']
+collection = db['polls']
 
 client = discord.Client()
-
-polls = {}
 
 @client.event
 async def on_ready():
@@ -11,32 +14,29 @@ async def on_ready():
 
 @client.event
 async def on_raw_reaction_add(payload):
-    if payload.message_id in polls:
-        if payload.emoji.id in [e.id for e in polls[payload.message_id]['emojis']]:
-            author = polls[payload.message_id]['author']
-            title = polls[payload.message_id]['title']
-            question = polls[payload.message_id]['question']
-            options = polls[payload.message_id]['options']
-            emojis = polls[payload.message_id]['emojis']
-            emoji_to_option = polls[payload.message_id]['emoji_to_option']
-            polls[payload.message_id]['options'][emoji_to_option[payload.emoji.id]] += 1
-            await polls[payload.message_id]['message'].edit(embed=prettyPrintEmbed(payload.message_id, author, title, question, options, emojis))
+    channel = client.get_channel(payload.channel_id)
+    msg = await channel.fetch_message(payload.message_id)
+    poll = collection.find_one({'_id': payload.message_id})
+    if poll and payload.emoji.id in poll['emoji_ids']:
+        option = poll['emoji_to_option'][str(payload.emoji.id)]
+        poll['options'][option] += 1
+        collection.update_one({'_id': poll['_id']}, {'$inc': {f"options.{option}": 1}})
+        await msg.edit(embed=prettyPrintEmbed(poll['_id'], poll['author'], poll['title'], poll['question'], poll['options'], poll['emoji_ids']))
 
 @client.event
 async def on_raw_reaction_remove(payload):
-    if payload.message_id in polls:
-        if payload.emoji.id in [e.id for e in polls[payload.message_id]['emojis']]:
-            author = polls[payload.message_id]['author']
-            title = polls[payload.message_id]['title']
-            question = polls[payload.message_id]['question']
-            options = polls[payload.message_id]['options']
-            emojis = polls[payload.message_id]['emojis']
-            emoji_to_option = polls[payload.message_id]['emoji_to_option']
-            polls[payload.message_id]['options'][emoji_to_option[payload.emoji.id]] -= 1
-            await polls[payload.message_id]['message'].edit(embed=prettyPrintEmbed(payload.message_id, author, title, question, options, emojis))
+    channel = client.get_channel(payload.channel_id)
+    msg = await channel.fetch_message(payload.message_id)
+    poll = collection.find_one({'_id': payload.message_id})
+    if poll and payload.emoji.id in poll['emoji_ids']:
+        option = poll['emoji_to_option'][str(payload.emoji.id)]
+        poll['options'][option] -= 1
+        collection.update_one({'_id': poll['_id']}, {'$inc': {f"options.{option}": -1}})
+        await msg.edit(embed=prettyPrintEmbed(poll['_id'], poll['author'], poll['title'], poll['question'], poll['options'], poll['emoji_ids']))
 
 @client.event
 async def on_message(message):
+    print(message.channel.id)
     if message.author == client.user:
         return
 
@@ -44,34 +44,41 @@ async def on_message(message):
         if message.content == '[poll]':
             await message.channel.send(embed=displayHelp())
             return
-        if message.content.startswith('[poll] clear'):
-            for poll in polls:
-                author = polls[poll]['author']
-                title = polls[poll]['title']
-                question = polls[poll]['question']
-                options = polls[poll]['options']
-                emojis = polls[poll]['emojis']
-                emoji_to_option = polls[poll]['emoji_to_option']
-                await polls[poll]['message'].edit(embed=prettyPrintEmbed(poll, author, title + ' [inactive]', question, options, emojis))
-            polls.clear()
+        if message.content.startswith('[poll] active'):
+            await message.channel.send([p['_id'] for p in collection.find()])
             return
         if message.content.startswith('[poll] inactive'):
             poll_id = int(message.content[len('[poll] inactive '):])
-            author = polls[poll_id]['author']
-            title = polls[poll_id]['title']
-            question = polls[poll_id]['question']
-            options = polls[poll_id]['options']
-            emojis = polls[poll_id]['emojis']
-            emoji_to_option = polls[poll_id]['emoji_to_option']
-            await polls[poll_id]['message'].edit(embed=prettyPrintEmbed(poll_id, author, title + ' [inactive]', question, options, emojis))
-            del polls[poll_id]
+            poll = collection.find_one({'_id': poll_id})
+            if poll:
+                try:
+                    msg = await message.channel.fetch_message(poll['_id'])
+                    await msg.edit(embed=prettyPrintEmbed(poll['_id'], poll['author'], poll['title'] + ' [inactive]', poll['question'], poll['options'], poll['emoji_ids']))
+                except:
+                    pass
+                finally:
+                    collection.delete_one({'_id': poll_id})
             return
-        if message.content.startswith('[poll] active'):
-            await message.channel.send([p for p in polls])
+        if message.content.startswith('[poll] clear'):
+            active_poll_exists = False
+            for poll in collection.find():
+                active_poll_exists = True
+                try:
+                    msg = await message.channel.fetch_message(poll['_id'])
+                    await msg.edit(embed=prettyPrintEmbed(poll['_id'], poll['author'], poll['title'] + ' [inactive]', poll['question'], poll['options'], poll['emoji_ids']))
+                except:
+                    pass
+            if active_poll_exists:
+                collection.delete_many({})
             return
-        if message.content.startswith('[poll] pin'):
+        if message.content.startswith('[test] pin'):
             poll_id = int(message.content[len('[poll] pin '):])
-            await polls[poll_id]['message'].pin()
+            try:
+                msg = await message.channel.fetch_message(poll_id)
+                if msg:
+                    await msg.pin()
+            except:
+                pass
             return
         user_input = list(map(lambda x : x.strip('[]'), re.findall('\[.+?\]', message.content[len('[poll] '):])))
         if len(user_input) < 2:
@@ -81,15 +88,17 @@ async def on_message(message):
         options = {o : 0 for o in user_input[2:]}
         emojis = list(e for e in message.guild.emojis if not e.animated)
         random.shuffle(emojis)
-        emojis = emojis[0:len(options)]
-        emoji_to_option = dict(zip([e.id for e in emojis], options))
-        m = await message.channel.send(embed=prettyPrintEmbed(message.id, message.author, title, question, options, emojis))
-        polls[m.id] = {'message': m, 'author': message.author, 'title': title, 'question': question, 'options': options, 'emojis': emojis, 'emoji_to_option': emoji_to_option}
-        await m.edit(embed=prettyPrintEmbed(m.id, message.author, title, question, options, emojis))
+        emoji_ids = [e.id for e in emojis[0:len(options)]]
+        emoji_to_option = dict(zip(map(str, emoji_ids), options))
+        m = await message.channel.send(embed=prettyPrintEmbed(message.id, str(message.author), title, question, options, emoji_ids))
+        poll = {'_id': m.id, 'author': str(message.author), 'title': title, 'question': question, 'options': options, 'emoji_ids': emoji_ids, 'emoji_to_option': emoji_to_option}
+        await m.edit(embed=prettyPrintEmbed(m.id, str(message.author), title, question, options, emoji_ids))
+        collection.insert_one(poll)
     
-def prettyPrintEmbed(poll_id, author, title, question, options, emojis):
+def prettyPrintEmbed(poll_id, author, title, question, options, emoji_ids):
     embed = discord.Embed(title=f'{title} (id: ||{poll_id}||)', description=f'**{question}**\nTubby who asked: {author}', color = 0x0000ff)
-    for option, emoji in zip(options, emojis):
+    for option, emoji_id in zip(options, emoji_ids):
+        emoji = client.get_emoji(emoji_id)
         embed.add_field(name='\u200b', value=f'{emoji} {option} - **{options[option]}**', inline=True)
     return embed
 
