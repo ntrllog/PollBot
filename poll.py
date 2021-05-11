@@ -47,7 +47,11 @@ async def on_message(message):
             await message.channel.send([p['_id'] for p in collection.find()])
             return
         if message.content.startswith('[poll] inactive'):
-            poll_id = int(message.content[len('[poll] inactive '):])
+            try:
+                poll_id = int(message.content[len('[poll] inactive '):])
+            except:
+                await message.channel.send('Invalid format dummy! [poll] inactive id_number_here')
+                return
             poll = collection.find_one({'_id': poll_id})
             if poll:
                 try:
@@ -70,8 +74,12 @@ async def on_message(message):
             if active_poll_exists:
                 collection.delete_many({})
             return
-        if message.content.startswith('[test] pin'):
-            poll_id = int(message.content[len('[poll] pin '):])
+        if message.content.startswith('[poll] pin'):
+            try:
+                poll_id = int(message.content[len('[poll] pin '):])
+            except:
+                await message.channel.send('Invalid format dummy! [poll] pin id_number_here')
+                return
             try:
                 msg = await message.channel.fetch_message(poll_id)
                 if msg:
@@ -81,10 +89,16 @@ async def on_message(message):
             return
         user_input = list(map(lambda x : x.strip('[]'), re.findall('\[.+?\]', message.content[len('[poll] '):])))
         if len(user_input) < 2:
-            await message.channel.send('Not enough info dummy! Need [title] [question] [option1] [option2] ...')
+            await message.channel.send('Not enough info dummy! Need [title] [question] [option1] [option2] ... [option 25]')
             return
         title, question = user_input[0:2]
-        options = {o : 0 for o in user_input[2:]}
+        options = {}
+        for o in user_input[2:]:
+            if '.' in o or '$' in o:
+                await message.channel.send("'.' and '$' are special characters that can't be used! Dummy.")
+                return
+            else:
+                options[o] = 0
         emojis = list(e for e in message.guild.emojis if not e.animated)
         random.shuffle(emojis)
         emoji_ids = [e.id for e in emojis[0:len(options)]]
@@ -102,11 +116,9 @@ def prettyPrintEmbed(poll_id, author, title, question, options, emoji_ids):
     return embed
 
 def displayHelp():
-    text = '''[poll] [title] [question] [option1] ... [option25]
-    [poll] active (list active polls)
-    [poll] inactive <id> (make poll with id inactive)
-    [poll] clear (make all polls inactive)
-    [poll] pin <id> (pin poll with id)
+    text = '''[poll] [title] [question] [option1] [option2] ... [option25]
+    [poll] inactive 9 (make poll with id of 9 inactive)
+    [poll] pin 9 (pin poll with id of 9)
     '''
     embed = discord.Embed(title='For Dummies', color = 0x00ff00)
     embed.add_field(name='Commands', value=text, inline=False)
