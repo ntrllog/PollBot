@@ -58,7 +58,7 @@ async def on_message(message):
                     msg = await message.channel.fetch_message(poll['_id'])
                     await msg.edit(embed=prettyPrintEmbed(poll['_id'], poll['author'], poll['title'] + ' [inactive]', poll['question'], poll['options'], poll['emoji_ids']))
                 except:
-                    pass
+                    await message.channel.send("Can't find message")
                 finally:
                     collection.delete_one({'_id': poll_id})
             return
